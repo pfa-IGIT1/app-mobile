@@ -48,11 +48,30 @@ class IdentityService {
     await _keyStore.deleteKeys();
   }
 
-  /// Une identité complète existe-t-elle (profil + clé privée) ?
+  /// Identité enregistrée sur la passerelle (pas un profil local de repli).
+  bool _isRegistered(LocalIdentity identity) {
+    return identity.registeredOnGateway && !identity.publicId.startsWith('local-');
+  }
+
+  /// Une identité complète existe-t-elle (profil + clé privée + passerelle) ?
+  ///
+  /// Les identités locales créées hors-ligne (ancien mode démo) sont
+  /// automatiquement supprimées pour renvoyer vers l'onboarding.
   Future<bool> isInitialised() async {
     final identity = await load();
-    if (identity == null) return false;
-    return _keyStore.hasKeys();
+    final hasKeys = await _keyStore.hasKeys();
+
+    if (identity == null) {
+      if (hasKeys) await _keyStore.deleteKeys();
+      return false;
+    }
+
+    if (!_isRegistered(identity) || !hasKeys) {
+      await clear();
+      return false;
+    }
+
+    return true;
   }
 
   /// Génère une VRAIE paire de clés Ed25519/X25519, la stocke de façon
@@ -76,7 +95,7 @@ class IdentityService {
       );
       await save(identity);
       return identity;
-    } on GatewayException {
+    } on GatewayException catch (e) {
       // La passerelle a peut-être déjà cette clé : on tente de la retrouver.
       try {
         final users = await _gateway.fetchUsers();
@@ -93,31 +112,13 @@ class IdentityService {
           return identity;
         }
       } catch (_) {
-        // ignore : on bascule sur une identité locale ci-dessous.
+        // Récupération impossible : on propage l'erreur d'enregistrement.
       }
-      return _saveLocalOnly(displayName.trim(), publicKey, createdAt);
-    } catch (_) {
-      // Passerelle injoignable (réseau) : identité locale hors-ligne.
-      return _saveLocalOnly(displayName.trim(), publicKey, createdAt);
+      await _keyStore.deleteKeys();
+      throw e;
+    } catch (e) {
+      await _keyStore.deleteKeys();
+      rethrow;
     }
-  }
-
-  /// Identité de repli enregistrée uniquement sur l'appareil (sans passerelle).
-  /// Permet d'utiliser/parcourir l'app quand la passerelle n'est pas joignable.
-  Future<LocalIdentity> _saveLocalOnly(
-    String displayName,
-    String publicKey,
-    DateTime createdAt,
-  ) async {
-    final localPublicId = 'local-${_crypto.sha256Hex(publicKey.codeUnits).substring(0, 16)}';
-    final identity = LocalIdentity(
-      publicId: localPublicId,
-      displayName: displayName,
-      publicKey: publicKey,
-      createdAt: createdAt,
-      registeredOnGateway: false,
-    );
-    await save(identity);
-    return identity;
   }
 }

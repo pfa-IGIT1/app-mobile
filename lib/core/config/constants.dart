@@ -9,7 +9,7 @@ abstract final class AppConstants {
   /// Hôte par défaut de la passerelle sur le réseau mesh (RPi).
   /// Écrasé à l'exécution par la découverte mDNS.
   /// Pour l'émulateur Android en dev, utiliser 10.0.2.2.
-  static const String defaultGatewayHost = '10.0.0.1';
+  static const String defaultGatewayHost = '10.0.1.1';
 
   /// Service mDNS annoncé par la passerelle.
   static const String gatewayMdnsService = '_pfa-gateway._tcp';
