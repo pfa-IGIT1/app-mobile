@@ -1,0 +1,21 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Icône Mesh">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2BB386"/>
+      <stop offset="1" stop-color="#137A57"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <!-- symbole mesh-M en blanc -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="300" y1="320" x2="724" y2="320" stroke="#FFFFFF" stroke-width="20" opacity="0.7"/>
+    <path d="M300 700 L300 320 L512 560 L724 320 L724 700" stroke="#FFFFFF" stroke-width="36"/>
+  </g>
+  <g fill="#FFFFFF">
+    <circle cx="300" cy="700" r="40"/>
+    <circle cx="300" cy="320" r="40"/>
+    <circle cx="724" cy="320" r="40"/>
+    <circle cx="724" cy="700" r="40"/>
+  </g>
+  <circle cx="512" cy="560" r="50" fill="#CFF3E4"/>
+</svg>
