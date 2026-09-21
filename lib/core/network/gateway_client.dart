@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -51,6 +52,7 @@ class GatewayClient {
   };
 
   static const Duration _timeout = Duration(seconds: 10);
+  static const Duration _fileTimeout = Duration(minutes: 2);
 
   // ---------------------------------------------------------------------------
   // Santé
@@ -172,23 +174,30 @@ class GatewayClient {
     required String ciphertextBase64,
     required String contentHash,
   }) async {
-    final res = await _http
-        .post(
-          _uri('/files'),
-          headers: _jsonHeaders,
-          body: jsonEncode({
-            'senderPublicId': senderPublicId,
-            'recipientPublicId': ?recipientPublicId,
-            'groupId': ?groupId,
-            'filename': ?filename,
-            'mimeType': ?mimeType,
-            'ciphertext': ciphertextBase64,
-            'contentHash': contentHash,
-          }),
-        )
-        .timeout(_timeout);
-    _ensureSuccess(res);
-    return GatewayFile.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+    return _retryTransient(
+      () async {
+        final res = await _http
+            .post(
+              _uri('/files'),
+              headers: _jsonHeaders,
+              body: jsonEncode({
+                'senderPublicId': senderPublicId,
+                'recipientPublicId': ?recipientPublicId,
+                'groupId': ?groupId,
+                'filename': ?filename,
+                'mimeType': ?mimeType,
+                'ciphertext': ciphertextBase64,
+                'contentHash': contentHash,
+              }),
+            )
+            .timeout(_fileTimeout);
+        _ensureSuccess(res);
+        return GatewayFile.fromJson(
+          jsonDecode(res.body) as Map<String, dynamic>,
+        );
+      },
+      label: 'envoi fichier',
+    );
   }
 
   /// Liste les fichiers associés à un utilisateur.
@@ -204,11 +213,16 @@ class GatewayClient {
 
   /// Télécharge le contenu binaire (chiffré) d'un fichier.
   Future<List<int>> downloadFileContent(String publicId) async {
-    final res = await _http
-        .get(_uri('/files/$publicId/content'))
-        .timeout(const Duration(seconds: 30));
-    _ensureSuccess(res);
-    return res.bodyBytes;
+    return _retryTransient(
+      () async {
+        final res = await _http
+            .get(_uri('/files/$publicId/content'))
+            .timeout(_fileTimeout);
+        _ensureSuccess(res);
+        return res.bodyBytes;
+      },
+      label: 'téléchargement fichier',
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -259,6 +273,38 @@ class GatewayClient {
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw GatewayException(res.statusCode, res.body);
     }
+  }
+
+  /// Réessaie les opérations fichiers en cas de coupure réseau passagère
+  /// (fréquent sur le WiFi mesh).
+  Future<T> _retryTransient<T>(
+    Future<T> Function() action, {
+    required String label,
+    int attempts = 3,
+  }) async {
+    Object? lastError;
+    for (var i = 0; i < attempts; i++) {
+      try {
+        return await action();
+      } catch (e) {
+        lastError = e;
+        if (e is GatewayException || !_isTransientNetworkError(e) || i == attempts - 1) {
+          rethrow;
+        }
+        await Future<void>.delayed(Duration(seconds: 1 << i));
+      }
+    }
+    throw lastError ?? StateError('$label: échec après $attempts tentatives');
+  }
+
+  bool _isTransientNetworkError(Object error) {
+    final msg = error.toString();
+    return error is TimeoutException ||
+        msg.contains('Connection reset') ||
+        msg.contains('Connection closed') ||
+        msg.contains('SocketException') ||
+        msg.contains('ClientException') ||
+        msg.contains('Software caused connection abort');
   }
 
   void close() => _http.close();

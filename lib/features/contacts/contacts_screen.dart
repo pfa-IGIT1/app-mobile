@@ -104,7 +104,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
           _header(context, 'Mon identité'),
           _tile(context, me.first, isSelf: true),
         ],
-        _header(context, 'Utilisateurs passerelle · ${others.length}'),
+        _header(context, 'Autre utilisateurs passerelle · ${others.length}'),
         if (others.isEmpty)
           const Padding(
             padding: EdgeInsets.all(24),

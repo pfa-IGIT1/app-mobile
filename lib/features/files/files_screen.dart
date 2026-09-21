@@ -1,12 +1,16 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../../core/app/app_scope.dart';
+import '../../core/config/constants.dart';
 import '../../core/crypto/crypto_keys.dart';
+import '../../core/network/gateway_client.dart';
+import '../../core/storage/user_file_storage.dart';
 import '../../data/models/file_item.dart';
 import '../../data/models/gateway_dtos.dart';
 
@@ -52,25 +56,61 @@ class _FilesScreenState extends State<FilesScreen> {
       });
       return;
     }
+
+    _myPublicId = identity.publicId;
+
+    // Annuaire : toujours rafraîchi, même si la liste des fichiers échoue.
+    List<GatewayUser> directory = _directory;
     try {
-      final directory = await services.gateway.fetchUsers();
+      directory = await services.gateway.fetchUsers();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Passerelle injoignable : $e';
+      });
+      return;
+    }
+
+    try {
       final files = await services.fileRepository.listForUser(identity.publicId);
       if (!mounted) return;
       setState(() {
-        _myPublicId = identity.publicId;
         _directory = directory;
         _files = files;
         _loading = false;
+        _error = null;
       });
     } catch (e) {
       final cached = await services.fileRepository.cached();
       if (!mounted) return;
       setState(() {
-        _myPublicId = identity.publicId;
+        _directory = directory;
         _files = cached;
         _loading = false;
         _error = cached.isEmpty ? '$e' : null;
       });
+    }
+  }
+
+  /// Recharge l'annuaire avant l'envoi (l'onglet peut être resté ouvert sans
+  /// actualisation alors que Messages a déjà chargé les contacts).
+  Future<List<GatewayUser>> _refreshDirectory() async {
+    final services = AppScope.of(context);
+    final identity = await services.identity.load();
+    if (identity == null) return _directory;
+
+    try {
+      final directory = await services.gateway.fetchUsers();
+      if (mounted) {
+        setState(() {
+          _myPublicId = identity.publicId;
+          _directory = directory;
+        });
+      }
+      return directory;
+    } catch (_) {
+      return _directory;
     }
   }
 
@@ -175,8 +215,12 @@ class _FilesScreenState extends State<FilesScreen> {
           subtitle: Text(
             '${_formatSize(f.size)} · ${f.isMine ? 'envoyé' : 'reçu'} · ${_formatDate(f.receivedAt)}',
           ),
-          trailing: const Icon(Icons.download),
-          onTap: _busy ? null : () => _downloadFile(f),
+          trailing: IconButton(
+            icon: const Icon(Icons.download_outlined),
+            tooltip: 'Télécharger',
+            onPressed: _busy ? null : () => _downloadFile(f),
+          ),
+          onTap: _busy ? null : () => _openFile(f),
         );
       },
     );
@@ -199,11 +243,26 @@ class _FilesScreenState extends State<FilesScreen> {
       _snack('Impossible de lire le fichier sélectionné.');
       return;
     }
+    if (bytes.length > AppConstants.maxUploadBytes) {
+      _snack(
+        'Fichier trop volumineux (${_formatSize(bytes.length)}). '
+        'Maximum : ${_formatSize(AppConstants.maxUploadBytes)}.',
+      );
+      return;
+    }
     if (!mounted) return;
 
     setState(() => _busy = true);
     final services = AppScope.of(context);
     try {
+      if (!await services.pingGateway()) {
+        _snack(
+          'Passerelle injoignable (${services.gateway.host}:${services.gateway.port}). '
+          'Vérifiez le WiFi mesh puis réessayez.',
+        );
+        return;
+      }
+
       await services.fileRepository.send(
         bytes: bytes,
         filename: file.name,
@@ -212,26 +271,52 @@ class _FilesScreenState extends State<FilesScreen> {
         recipientPublicId: recipient.publicId,
         recipientPublicKey: recipient.publicKey,
       );
-      _snack('« ${file.name} » chiffré et envoyé à ${recipient.displayName}.');
+      await UserFileStorage.saveBytes(
+        bytes: bytes,
+        filename: file.name,
+        subfolder: 'envoyes',
+      );
+      final localHint = await UserFileStorage.displayPath('envoyes');
+      _snack(
+        '« ${file.name} » envoyé à ${recipient.displayName}.\n'
+        'Copie locale : $localHint',
+      );
+      await _load();
+    } on GatewayException catch (e) {
+      _snack(_describeSendError(e));
+      await _load();
+    } on TimeoutException catch (e) {
+      _snack(_describeSendError(e));
       await _load();
     } catch (e) {
-      _snack('Envoi échoué : $e');
+      _snack(_describeSendError(e));
+      await _load();
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<GatewayUser?> _pickRecipient() async {
-    final candidates = _directory
-        .where((u) =>
-            u.publicId != _myPublicId &&
-            u.status == 'active' &&
-            PublicKeyBundle.isE2ECapable(u.publicKey))
+    final directory = await _refreshDirectory();
+    final active = directory
+        .where((u) => u.publicId != _myPublicId && u.status == 'active')
         .toList();
-    if (candidates.isEmpty) {
-      _snack('Aucun destinataire compatible E2E enregistré.');
+
+    if (active.isEmpty) {
+      _snack(
+        'Aucun contact actif sur la passerelle. '
+        'Vérifiez que l\'autre téléphone est bien enregistré, puis actualisez.',
+      );
       return null;
     }
+
+    final e2eCapable = active
+        .where((u) => PublicKeyBundle.isE2ECapable(u.publicKey))
+        .toList();
+
+    // Même annuaire que Messages : on affiche tous les contacts actifs.
+    final candidates = active;
+
     return showModalBottomSheet<GatewayUser>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -243,11 +328,30 @@ class _FilesScreenState extends State<FilesScreen> {
               child: Text('Envoyer à…',
                   style: TextStyle(fontWeight: FontWeight.bold)),
             ),
+            if (e2eCapable.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  'Les contacts ci-dessous n\'ont pas encore de clé E2E '
+                  'compatible (format pfa:v1). Réenregistrez-les via l\'app.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+              ),
             for (final u in candidates)
               ListTile(
-                leading: const Icon(Icons.person),
+                leading: Icon(
+                  PublicKeyBundle.isE2ECapable(u.publicKey)
+                      ? Icons.person
+                      : Icons.person_off_outlined,
+                ),
                 title: Text(u.displayName),
-                onTap: () => Navigator.pop(ctx, u),
+                subtitle: PublicKeyBundle.isE2ECapable(u.publicKey)
+                    ? null
+                    : const Text('Clé non compatible E2E'),
+                enabled: PublicKeyBundle.isE2ECapable(u.publicKey),
+                onTap: PublicKeyBundle.isE2ECapable(u.publicKey)
+                    ? () => Navigator.pop(ctx, u)
+                    : null,
               ),
           ],
         ),
@@ -256,7 +360,7 @@ class _FilesScreenState extends State<FilesScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Téléchargement + déchiffrement
+  // Téléchargement (enregistre dans Téléchargements/TraNaSi, sans ouvrir)
   // ---------------------------------------------------------------------------
 
   Future<void> _downloadFile(FileItem item) async {
@@ -265,12 +369,15 @@ class _FilesScreenState extends State<FilesScreen> {
     try {
       final decrypted = await services.fileRepository
           .download(item, directory: _directory);
-      final dir = await getApplicationDocumentsDirectory();
-      final outDir = Directory(p.join(dir.path, 'pfa_downloads'));
-      await outDir.create(recursive: true);
-      final outPath = p.join(outDir.path, decrypted.name);
-      await File(outPath).writeAsBytes(decrypted.bytes);
-      _snack('Déchiffré et enregistré : $outPath');
+      await UserFileStorage.saveBytes(
+        bytes: decrypted.bytes,
+        filename: decrypted.name,
+        subfolder: item.isMine ? 'envoyes' : 'recus',
+      );
+      final localHint = await UserFileStorage.displayPath(
+        item.isMine ? 'envoyes' : 'recus',
+      );
+      _snack('« ${item.name} » enregistré dans $localHint');
     } catch (e) {
       _snack('Téléchargement échoué : $e');
     } finally {
@@ -279,8 +386,68 @@ class _FilesScreenState extends State<FilesScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Ouverture (appui sur la ligne — n'enregistre pas dans Téléchargements)
+  // ---------------------------------------------------------------------------
+
+  Future<void> _openFile(FileItem item) async {
+    setState(() => _busy = true);
+    final services = AppScope.of(context);
+    try {
+      var localPath = await UserFileStorage.findAnywhere(
+        item.name,
+        preferSent: item.isMine,
+      );
+
+      if (localPath == null) {
+        final decrypted = await services.fileRepository
+            .download(item, directory: _directory);
+        localPath = await UserFileStorage.saveToCache(
+          bytes: decrypted.bytes,
+          filename: decrypted.name,
+        );
+      }
+
+      if (!mounted) return;
+      final result = await OpenFilex.open(localPath);
+      if (!mounted) return;
+
+      if (result.type != ResultType.done) {
+        _snack(
+          result.message.isNotEmpty
+              ? result.message
+              : 'Aucune application pour ouvrir « ${item.name} ».',
+        );
+      }
+    } catch (e) {
+      _snack('Impossible d\'ouvrir le fichier : $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Utilitaires
   // ---------------------------------------------------------------------------
+
+  String _describeSendError(Object error) {
+    final msg = error.toString();
+    if (msg.contains('413') || msg.contains('entity too large')) {
+      return 'Fichier trop volumineux pour la passerelle. '
+          'Essayez un fichier de moins de ${_formatSize(AppConstants.maxUploadBytes)}.';
+    }
+    if (error is TimeoutException || msg.contains('TimeoutException')) {
+      return 'Envoi interrompu (délai dépassé). '
+          'Vérifiez le WiFi mesh ou essayez un fichier plus petit.';
+    }
+    if (msg.contains('Connection reset') ||
+        msg.contains('SocketException') ||
+        msg.contains('ClientException')) {
+      return 'Connexion coupée avec la passerelle pendant l\'envoi. '
+          'L\'app réessaie automatiquement ; si l\'erreur persiste, '
+          'rapprochez-vous du routeur mesh et actualisez la liste.';
+    }
+    return 'Envoi échoué : $error';
+  }
 
   void _snack(String message) {
     if (!mounted) return;

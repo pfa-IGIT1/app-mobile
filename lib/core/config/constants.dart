@@ -16,4 +16,7 @@ abstract final class AppConstants {
 
   static const String txTypeMessage = 'message';
   static const String txTypeFile = 'file';
+
+  /// Taille max d'un fichier brut avant chiffrement (base64 + JSON grossit ~40 %).
+  static const int maxUploadBytes = 15 * 1024 * 1024;
 }

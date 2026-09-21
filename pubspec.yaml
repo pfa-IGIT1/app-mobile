@@ -56,6 +56,8 @@ dependencies:
   pretty_qr_code: ^3.4.0
   # Partage de la clé publique via la feuille de partage système (WhatsApp…).
   share_plus: ^10.1.4
+  # Ouvre un fichier avec l'application par défaut du téléphone.
+  open_filex: ^4.7.0
 
 dev_dependencies:
   flutter_test:

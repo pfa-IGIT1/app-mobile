@@ -83,12 +83,12 @@ class PublicKeyBundle {
   /// Tente de décoder une clé publique combinée. Renvoie `null` si la chaîne
   /// n'est pas au format attendu (ex. anciennes clés `ed25519:...` du seed).
   static PublicKeyBundle? tryParse(String value) {
-    final parts = value.split(':');
+    final parts = value.trim().split(':');
     if (parts.length != 4) return null;
     if (parts[0] != _prefix || parts[1] != _version) return null;
     try {
-      final ed = Uint8List.fromList(base64Url.decode(_pad(parts[2])));
-      final x = Uint8List.fromList(base64Url.decode(_pad(parts[3])));
+      final ed = Uint8List.fromList(base64Url.decode(_pad(parts[2].trim())));
+      final x = Uint8List.fromList(base64Url.decode(_pad(parts[3].trim())));
       if (ed.length != 32 || x.length != 32) return null;
       return PublicKeyBundle(edPublic: ed, xPublic: x);
     } catch (_) {
