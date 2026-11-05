@@ -16,57 +16,172 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _loading = false;
 
   Future<void> _createIdentity() async {
-    final name = await _askDisplayName();
-    if (name == null || name.trim().isEmpty || !mounted) return;
+    final services = AppScope.of(context);
+    final form = await _askRegistration(services.gateway.enrollCode);
+    if (form == null || form.name.trim().isEmpty || !mounted) return;
 
     setState(() => _loading = true);
-    final services = AppScope.of(context);
 
     try {
-      await services.identity.createAndRegister(name.trim());
+      await services.setEnrollCode(form.enrollCode);
+      await services.identity.createAndRegister(form.name.trim());
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, App.routeHome);
     } on GatewayException catch (e) {
       if (!mounted) return;
-      _showError(
-        'Passerelle injoignable (${e.statusCode}). '
-        'Vérifiez que admin-service tourne sur le port 3001.',
-      );
+      _showError(_describeGatewayError(e));
     } catch (e) {
       if (!mounted) return;
-      _showError('Impossible de créer l\'identité : $e');
+      _showError(
+        'Passerelle injoignable. Le téléphone est-il connecté au WiFi du '
+        'dongle (et l\'adresse de la passerelle correcte dans Réglages) ? '
+        '($e)',
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<String?> _askDisplayName() async {
-    final controller = TextEditingController();
-    return showDialog<String>(
+  /// Adresse de la passerelle : nécessaire AVANT l'inscription (les Réglages ne
+  /// sont accessibles qu'une fois l'identité créée).
+  Future<void> _editEndpoint() async {
+    final services = AppScope.of(context);
+    final hostCtrl = TextEditingController(text: services.gateway.host);
+    final portCtrl =
+        TextEditingController(text: services.gateway.port.toString());
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Votre nom affiché'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(
-            hintText: 'Ex. Moussa Sissao',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (_) => Navigator.pop(ctx, controller.text),
+        title: const Text('Adresse de la passerelle'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: hostCtrl,
+              decoration: const InputDecoration(labelText: 'Hôte / IP'),
+            ),
+            TextField(
+              controller: portCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Port'),
+            ),
+          ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.pop(ctx, false),
             child: const Text('Annuler'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Continuer'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Enregistrer'),
           ),
         ],
       ),
+    );
+    if (ok != true || !mounted) return;
+    final host = hostCtrl.text.trim();
+    if (host.isEmpty) return;
+    final port = int.tryParse(portCtrl.text.trim()) ?? services.gateway.port;
+    await services.setGatewayEndpoint(host, port);
+    if (!mounted) return;
+    setState(() {});
+    final online = await services.pingGateway();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          online
+              ? 'Passerelle joignable : $host:$port'
+              : 'Passerelle injoignable : $host:$port (WiFi du dongle ?)',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _discover() async {
+    setState(() => _loading = true);
+    final services = AppScope.of(context);
+    try {
+      await services.pingGateway(); // rebranche le trafic sur le WiFi
+      final found = await services.discoverGateway();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            found != null
+                ? 'Passerelle trouvée : $found'
+                : 'Aucune passerelle détectée par mDNS : saisissez son adresse.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// Traduit un refus HTTP de la passerelle (elle EST joignable).
+  String _describeGatewayError(GatewayException e) {
+    final body = e.body;
+    if (e.statusCode == 401 && body.contains('Code d')) {
+      return 'Code d\'inscription manquant ou invalide.';
+    }
+    if (e.statusCode == 401 && body.contains('Horodatage')) {
+      return 'Horloge déréglée : la passerelle refuse l\'horodatage de la '
+          'requête (tolérance 300 s).';
+    }
+    if (e.statusCode == 401 || e.statusCode == 403) {
+      return 'Inscription refusée par la passerelle (${e.statusCode}) : $body';
+    }
+    return 'Erreur de la passerelle (${e.statusCode}) : $body';
+  }
+
+  Future<({String name, String enrollCode})?> _askRegistration(
+    String? currentCode,
+  ) async {
+    final nameController = TextEditingController();
+    final codeController = TextEditingController(text: currentCode ?? '');
+    return showDialog<({String name, String enrollCode})>(
+      context: context,
+      builder: (ctx) {
+        void submit() => Navigator.pop(
+              ctx,
+              (name: nameController.text, enrollCode: codeController.text),
+            );
+        return AlertDialog(
+          title: const Text('Votre nom affiché'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  hintText: 'Ex. Moussa Sissao',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: codeController,
+                decoration: const InputDecoration(
+                  labelText: 'Code d\'inscription (si demandé)',
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => submit(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(onPressed: submit, child: const Text('Continuer')),
+          ],
+        );
+      },
     );
   }
 
@@ -131,7 +246,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   minimumSize: const Size.fromHeight(48),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: _loading ? null : _editEndpoint,
+                icon: const Icon(Icons.dns),
+                label: Text(
+                  'Passerelle : ${AppScope.of(context).gateway.host}:'
+                  '${AppScope.of(context).gateway.port}',
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _loading ? null : _discover,
+                icon: const Icon(Icons.wifi_find),
+                label: const Text('Rechercher la passerelle (mDNS)'),
+              ),
+              const SizedBox(height: 12),
             ],
           ),
         ),

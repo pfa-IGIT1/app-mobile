@@ -10,6 +10,7 @@ import '../database/daos/sync_dao.dart';
 import '../identity/identity_service.dart';
 import '../network/gateway_client.dart';
 import '../network/gateway_discovery.dart';
+import '../network/wifi_binding.dart';
 import '../sync/sync_service.dart';
 import '../../data/repositories/contact_repository.dart';
 import '../../data/repositories/file_repository.dart';
@@ -37,6 +38,7 @@ class AppServices {
 
   static const _hostPrefsKey = 'gateway_host';
   static const _portPrefsKey = 'gateway_port';
+  static const _enrollPrefsKey = 'enroll_code';
 
   final GatewayClient gateway;
   final IdentityService identity;
@@ -67,6 +69,16 @@ class AppServices {
     final filesDao = FilesDao(database);
     final syncDao = SyncDao(database);
     final identity = IdentityService(gateway, crypto, keyStore);
+
+    // Chaque requête est signée avec la clé Ed25519 de l'utilisateur
+    // (MOBILE_AUTH=enforce côté passerelle).
+    gateway.enrollCode = prefs.getString(_enrollPrefsKey);
+    gateway.configureAuth(
+      keyId: () async => (await identity.load())?.publicId,
+      sign: crypto.sign,
+    );
+    // Android : forcer le trafic sur le WiFi du dongle (voir wifi_binding.dart).
+    await WifiBinding.bindToWifi();
 
     final messageRepository = MessageRepository(
       messagesDao: messagesDao,
@@ -103,7 +115,24 @@ class AppServices {
     );
   }
 
-  Future<bool> pingGateway() => gateway.ping();
+  /// Ping de la passerelle. Rebranche d'abord le trafic sur le WiFi : le
+  /// téléphone a pu changer de réseau depuis le dernier appel.
+  Future<bool> pingGateway() async {
+    await WifiBinding.bindToWifi();
+    return gateway.ping();
+  }
+
+  /// Code d'inscription demandé par la passerelle (vide = aucun).
+  Future<void> setEnrollCode(String? code) async {
+    final value = code?.trim();
+    gateway.enrollCode = (value == null || value.isEmpty) ? null : value;
+    final prefs = await SharedPreferences.getInstance();
+    if (gateway.enrollCode == null) {
+      await prefs.remove(_enrollPrefsKey);
+    } else {
+      await prefs.setString(_enrollPrefsKey, gateway.enrollCode!);
+    }
+  }
 
   /// Fixe manuellement l'hôte/port de la passerelle et le mémorise.
   Future<void> setGatewayEndpoint(String host, int port) async {

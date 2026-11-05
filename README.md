@@ -28,6 +28,26 @@ Messagerie et partage de fichiers. L’appareil se connecte en **WiFi local** au
   dans Réglages. Quasi-temps réel par interrogation périodique (l'admin-service
   n'expose pas de WebSocket).
 
+## Authentification des requêtes (v1.1)
+
+Depuis le verrouillage des routes mobiles de l'admin-service (`MOBILE_AUTH=enforce`,
+défaut), **chaque requête sauf `/health` est signée en Ed25519** avec la clé privée de
+l'utilisateur : en-têtes `X-Key-Id`, `X-Timestamp`, `X-Nonce`, `X-Signature`
+(`lib/core/network/request_signer.dart`, spécification : `admin-service/docs/MOBILE_AUTH.md`).
+
+- Inscription : auto-signée (la clé publique est dans le corps) ; `X-Enroll-Code` si la
+  passerelle définit `ENROLLMENT_CODE` (champ « Code d'inscription » à l'inscription).
+- Annuaire : `GET /users/directory` (signé). `GET /users` reste réservé à l'administrateur.
+- Horloge : les Pi n'ont pas d'horloge temps réel ; le client se cale sur l'en-tête `Date`
+  des réponses de la passerelle (tolérance serveur : 300 s) et rejoue une fois une requête
+  rejetée pour horodatage.
+- Android : `WifiBinding` attache le trafic au WiFi (le WiFi du dongle n'a pas Internet ;
+  sinon Android peut router vers les données mobiles).
+- Adresse de la passerelle : `--dart-define=GATEWAY_HOST=<ip>` à la compilation, ou bouton
+  « Passerelle » à l'inscription / Réglages.
+
+Test : `flutter test test/gateway_signing_test.dart` (vecteur de test de la passerelle inclus).
+
 ## Cache local (§6, §11)
 
 Le téléphone stocke le **clair** (bout-en-bout). La passerelle ne voit que du chiffré ; la blockchain n’ancre que des empreintes.

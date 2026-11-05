@@ -9,7 +9,12 @@ abstract final class AppConstants {
   /// Hôte par défaut de la passerelle sur le réseau mesh (RPi).
   /// Écrasé à l'exécution par la découverte mDNS.
   /// Pour l'émulateur Android en dev, utiliser 10.0.2.2.
-  static const String defaultGatewayHost = '10.0.1.1';
+  ///
+  /// Modifiable à la compilation sans toucher au code :
+  /// `flutter run --dart-define=GATEWAY_HOST=10.0.0.3`
+  /// (ou ensuite dans Réglages > Passerelle).
+  static const String defaultGatewayHost =
+      String.fromEnvironment('GATEWAY_HOST', defaultValue: '10.0.1.1');
 
   /// Service mDNS annoncé par la passerelle.
   static const String gatewayMdnsService = '_pfa-gateway._tcp';
