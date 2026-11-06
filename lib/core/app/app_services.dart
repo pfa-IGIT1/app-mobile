@@ -119,7 +119,36 @@ class AppServices {
   /// téléphone a pu changer de réseau depuis le dernier appel.
   Future<bool> pingGateway() async {
     await WifiBinding.bindToWifi();
-    return gateway.ping();
+    if (await gateway.ping()) return true;
+    return _autoResolveGateway();
+  }
+
+  /// L'hôte courant ne répond pas (adresse du dongle changée ?) : on essaie
+  /// 1) la passerelle DHCP du WiFi (= le dongle), 2) mDNS. Un candidat n'est
+  /// retenu et mémorisé que s'il répond à `/health`.
+  Future<bool> _autoResolveGateway() async {
+    final candidates = <GatewayEndpoint>[];
+    final dhcp = await WifiBinding.gatewayAddress();
+    if (dhcp != null && dhcp.isNotEmpty) {
+      candidates.add(GatewayEndpoint(host: dhcp, port: gateway.port));
+    }
+    final mdns = await discovery.discover(timeout: const Duration(seconds: 2));
+    if (mdns != null) candidates.add(mdns);
+
+    final prevHost = gateway.host;
+    final prevPort = gateway.port;
+    for (final c in candidates) {
+      if (c.host == prevHost && c.port == prevPort) continue;
+      gateway.host = c.host;
+      gateway.port = c.port;
+      if (await gateway.ping()) {
+        await setGatewayEndpoint(c.host, c.port);
+        return true;
+      }
+    }
+    gateway.host = prevHost;
+    gateway.port = prevPort;
+    return false;
   }
 
   /// Code d'inscription demandé par la passerelle (vide = aucun).

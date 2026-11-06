@@ -24,6 +24,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     try {
       await services.setEnrollCode(form.enrollCode);
+      await services.pingGateway(); // WiFi + redécouverte auto de l'adresse
       await services.identity.createAndRegister(form.name.trim());
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, App.routeHome);

@@ -23,4 +23,15 @@ abstract final class WifiBinding {
       return false;
     }
   }
+
+  /// Android : adresse IPv4 de la passerelle du WiFi courant (celle du dongle,
+  /// fournie par son DHCP), ou `null` si indisponible.
+  static Future<String?> gatewayAddress() async {
+    try {
+      if (!Platform.isAndroid) return null;
+      return await _channel.invokeMethod<String>('wifiGateway');
+    } catch (_) {
+      return null;
+    }
+  }
 }

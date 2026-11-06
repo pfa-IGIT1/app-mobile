@@ -11,10 +11,10 @@ abstract final class AppConstants {
   /// Pour l'émulateur Android en dev, utiliser 10.0.2.2.
   ///
   /// Modifiable à la compilation sans toucher au code :
-  /// `flutter run --dart-define=GATEWAY_HOST=10.0.0.3`
+  /// `flutter run --dart-define=GATEWAY_HOST=192.168.50.1`
   /// (ou ensuite dans Réglages > Passerelle).
   static const String defaultGatewayHost =
-      String.fromEnvironment('GATEWAY_HOST', defaultValue: '10.0.1.1');
+      String.fromEnvironment('GATEWAY_HOST', defaultValue: '192.168.50.1');
 
   /// Service mDNS annoncé par la passerelle.
   static const String gatewayMdnsService = '_pfa-gateway._tcp';
